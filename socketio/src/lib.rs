@@ -193,8 +193,8 @@ pub mod asynchronous;
 pub use error::Error;
 
 pub use {
-    event::CloseReason, event::Event, parser::DefaultPacketParser, parser::PacketParser,
-    payload::Payload,
+    event::CloseReason, event::Event, packet::Packet, packet::PacketId,
+    parser::DefaultPacketParser, parser::PacketParser, payload::Payload,
 };
 
 pub use client::{ClientBuilder, RawClient, TransportType};
