@@ -5,9 +5,12 @@ use rust_engineio::{
     header::{HeaderMap, HeaderValue},
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 use url::Url;
 
-use crate::{error::Result, Event, Payload, TlsConfig, TransportType};
+use crate::{
+    error::Result, DefaultPacketParser, Event, PacketParser, Payload, TlsConfig, TransportType,
+};
 
 use super::{
     callback::{
@@ -27,6 +30,7 @@ pub struct ClientBuilder {
     pub(crate) on_any: Option<Callback<DynAsyncAnyCallback>>,
     pub(crate) on_reconnect: Option<Callback<DynAsyncReconnectSettingsCallback>>,
     pub(crate) namespace: String,
+    parser: Arc<dyn PacketParser + Send + Sync>,
     tls_config: Option<TlsConfig>,
     pub(crate) opening_headers: Option<HeaderMap>,
     transport_type: TransportType,
@@ -86,6 +90,7 @@ impl ClientBuilder {
             on_any: None,
             on_reconnect: None,
             namespace: "/".to_owned(),
+            parser: Arc::new(DefaultPacketParser),
             tls_config: None,
             opening_headers: None,
             transport_type: TransportType::Any,
@@ -399,6 +404,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         self
     }
 
+    /// Specifies which [`PacketParser`] to use to parse [`Packet`].
+    pub fn parser(mut self, parser: impl PacketParser + Send + Sync + 'static) -> Self {
+        self.parser = Arc::new(parser);
+
+        self
+    }
+
     /// If set to `false` do not try to reconnect on network errors. Defaults to
     /// `true`
     pub fn reconnect(mut self, reconnect: bool) -> Self {
@@ -485,7 +497,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             TransportType::WebsocketUpgrade => builder.build_websocket_with_upgrade().await?,
         };
 
-        let inner_socket = InnerSocket::new(engine_client)?;
+        let inner_socket = InnerSocket::new(engine_client, Arc::clone(&self.parser))?;
         Ok(inner_socket)
     }
 

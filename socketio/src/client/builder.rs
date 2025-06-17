@@ -1,6 +1,7 @@
 use super::super::{event::Event, payload::Payload};
 use super::callback::Callback;
 use super::client::Client;
+use crate::parser::{DefaultPacketParser, PacketParser};
 use crate::{RawClient, TlsConfig};
 use rust_engineio::client::ClientBuilder as EngineIoClientBuilder;
 use rust_engineio::header::{HeaderMap, HeaderValue};
@@ -36,6 +37,7 @@ pub struct ClientBuilder {
     on: Arc<Mutex<HashMap<Event, Callback<SocketCallback>>>>,
     on_any: Arc<Mutex<Option<Callback<SocketAnyCallback>>>>,
     namespace: String,
+    parser: Arc<dyn PacketParser + Send + Sync>,
     tls_config: Option<TlsConfig>,
     opening_headers: Option<HeaderMap>,
     transport_type: TransportType,
@@ -86,6 +88,7 @@ impl ClientBuilder {
             address: address.into(),
             on: Arc::new(Mutex::new(HashMap::new())),
             on_any: Arc::new(Mutex::new(None)),
+            parser: Arc::new(DefaultPacketParser),
             namespace: "/".to_owned(),
             tls_config: None,
             opening_headers: None,
@@ -103,7 +106,7 @@ impl ClientBuilder {
     /// Sets the target namespace of the client. The namespace should start
     /// with a leading `/`. Valid examples are e.g. `/admin`, `/foo`.
     pub fn namespace<T: Into<String>>(mut self, namespace: T) -> Self {
-        let mut nsp = namespace.into();
+        let mut nsp: String = namespace.into();
         if !nsp.starts_with('/') {
             nsp = "/".to_owned() + &nsp;
         }
@@ -329,6 +332,13 @@ let socket = ClientBuilder::new("http://localhost:4200/")
         self
     }
 
+    /// Specifies which [`PacketParser`] to use to parse [`Packet`].
+    pub fn parser(mut self, parser: impl PacketParser + Send + Sync + 'static) -> Self {
+        self.parser = Arc::new(parser);
+
+        self
+    }
+
     /// Connects the socket to a certain endpoint. This returns a connected
     /// [`Client`] instance. This method returns an [`std::result::Result::Err`]
     /// value if something goes wrong during connection. Also starts a separate
@@ -380,7 +390,7 @@ let socket = ClientBuilder::new("http://localhost:4200/")
             TransportType::WebsocketUpgrade => builder.build_websocket_with_upgrade()?,
         };
 
-        let inner_socket = InnerSocket::new(engine_client)?;
+        let inner_socket = InnerSocket::new(engine_client, Arc::clone(&self.parser))?;
 
         let socket = RawClient::new(
             inner_socket,
