@@ -1,8 +1,8 @@
 use super::super::{event::Event, payload::Payload};
 use super::callback::Callback;
 use super::client::Client;
-use crate::RawClient;
-use native_tls::TlsConnector;
+use crate::parser::{DefaultPacketParser, PacketParser};
+use crate::{RawClient, TlsConfig};
 use rust_engineio::client::ClientBuilder as EngineIoClientBuilder;
 use rust_engineio::header::{HeaderMap, HeaderValue};
 use url::Url;
@@ -37,7 +37,8 @@ pub struct ClientBuilder {
     on: Arc<Mutex<HashMap<Event, Callback<SocketCallback>>>>,
     on_any: Arc<Mutex<Option<Callback<SocketAnyCallback>>>>,
     namespace: String,
-    tls_config: Option<TlsConnector>,
+    parser: Arc<dyn PacketParser + Send + Sync>,
+    tls_config: Option<TlsConfig>,
     opening_headers: Option<HeaderMap>,
     transport_type: TransportType,
     auth: Option<serde_json::Value>,
@@ -87,6 +88,7 @@ impl ClientBuilder {
             address: address.into(),
             on: Arc::new(Mutex::new(HashMap::new())),
             on_any: Arc::new(Mutex::new(None)),
+            parser: Arc::new(DefaultPacketParser),
             namespace: "/".to_owned(),
             tls_config: None,
             opening_headers: None,
@@ -104,7 +106,7 @@ impl ClientBuilder {
     /// Sets the target namespace of the client. The namespace should start
     /// with a leading `/`. Valid examples are e.g. `/admin`, `/foo`.
     pub fn namespace<T: Into<String>>(mut self, namespace: T) -> Self {
-        let mut nsp = namespace.into();
+        let mut nsp: String = namespace.into();
         if !nsp.starts_with('/') {
             nsp = "/".to_owned() + &nsp;
         }
@@ -210,24 +212,48 @@ impl ClientBuilder {
 
     /// Uses a preconfigured TLS connector for secure communication. This configures
     /// both the `polling` as well as the `websocket` transport type.
-    /// # Example
-    /// ```rust
-    /// use rust_socketio::{ClientBuilder, Payload};
-    /// use native_tls::TlsConnector;
-    ///
-    /// let tls_connector =  TlsConnector::builder()
-    ///            .use_sni(true)
-    ///            .build()
-    ///            .expect("Found illegal configuration");
-    ///
-    /// let socket = ClientBuilder::new("http://localhost:4200/")
-    ///     .namespace("/admin")
-    ///     .on("error", |err, _| eprintln!("Error: {:#?}", err))
-    ///     .tls_config(tls_connector)
-    ///     .connect();
-    ///
-    /// ```
-    pub fn tls_config(mut self, tls_config: TlsConnector) -> Self {
+    #[cfg_attr(
+        feature = "_native-tls",
+        doc = r#"
+# Example for native-tls
+
+```rust
+use rust_socketio::{ClientBuilder, Payload};
+
+let tls_connector = native_tls::TlsConnector::builder()
+            .use_sni(true)
+            .build()
+            .expect("Found illegal configuration");
+
+# #[cfg(not(feature = "_rustls-tls"))] {
+let socket = ClientBuilder::new("http://localhost:4200/")
+    .namespace("/admin")
+    .on("error", |err, _| eprintln!("Error: {:#?}", err))
+    .tls_config(tls_connector)
+    .connect();
+# }
+```"#
+    )]
+    #[cfg_attr(
+        feature = "_rustls-tls",
+        doc = r#"
+# Example for rustls
+
+```rust
+use rust_socketio::{ClientBuilder, Payload};
+
+let tls_config = rustls::ClientConfig::builder()
+    .with_root_certificates(rustls::RootCertStore::empty())
+    .with_no_client_auth();
+
+let socket = ClientBuilder::new("http://localhost:4200/")
+    .namespace("/admin")
+    .on("error", |err, _| eprintln!("Error: {:#?}", err))
+    .tls_config(tls_config)
+    .connect();
+```"#
+    )]
+    pub fn tls_config(mut self, tls_config: TlsConfig) -> Self {
         self.tls_config = Some(tls_config);
         self
     }
@@ -306,6 +332,13 @@ impl ClientBuilder {
         self
     }
 
+    /// Specifies which [`PacketParser`] to use to parse [`Packet`].
+    pub fn parser(mut self, parser: impl PacketParser + Send + Sync + 'static) -> Self {
+        self.parser = Arc::new(parser);
+
+        self
+    }
+
     /// Connects the socket to a certain endpoint. This returns a connected
     /// [`Client`] instance. This method returns an [`std::result::Result::Err`]
     /// value if something goes wrong during connection. Also starts a separate
@@ -357,7 +390,7 @@ impl ClientBuilder {
             TransportType::WebsocketUpgrade => builder.build_websocket_with_upgrade()?,
         };
 
-        let inner_socket = InnerSocket::new(engine_client)?;
+        let inner_socket = InnerSocket::new(engine_client, Arc::clone(&self.parser))?;
 
         let socket = RawClient::new(
             inner_socket,

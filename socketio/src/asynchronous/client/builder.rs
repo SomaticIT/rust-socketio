@@ -1,14 +1,16 @@
 use futures_util::future::BoxFuture;
 use log::trace;
-use native_tls::TlsConnector;
 use rust_engineio::{
     asynchronous::ClientBuilder as EngineIoClientBuilder,
     header::{HeaderMap, HeaderValue},
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 use url::Url;
 
-use crate::{error::Result, Event, Payload, TransportType};
+use crate::{
+    error::Result, DefaultPacketParser, Event, PacketParser, Payload, TlsConfig, TransportType,
+};
 
 use super::{
     callback::{
@@ -28,7 +30,8 @@ pub struct ClientBuilder {
     pub(crate) on_any: Option<Callback<DynAsyncAnyCallback>>,
     pub(crate) on_reconnect: Option<Callback<DynAsyncReconnectSettingsCallback>>,
     pub(crate) namespace: String,
-    tls_config: Option<TlsConnector>,
+    parser: Arc<dyn PacketParser + Send + Sync>,
+    tls_config: Option<TlsConfig>,
     pub(crate) opening_headers: Option<HeaderMap>,
     transport_type: TransportType,
     pub(crate) auth: Option<serde_json::Value>,
@@ -87,6 +90,7 @@ impl ClientBuilder {
             on_any: None,
             on_reconnect: None,
             namespace: "/".to_owned(),
+            parser: Arc::new(DefaultPacketParser),
             tls_config: None,
             opening_headers: None,
             transport_type: TransportType::Any,
@@ -265,28 +269,60 @@ impl ClientBuilder {
 
     /// Uses a preconfigured TLS connector for secure communication. This configures
     /// both the `polling` as well as the `websocket` transport type.
-    /// # Example
-    /// ```rust
-    /// use rust_socketio::{asynchronous::ClientBuilder, Payload};
-    /// use native_tls::TlsConnector;
-    /// use futures_util::future::FutureExt;
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///     let tls_connector =  TlsConnector::builder()
-    ///                .use_sni(true)
-    ///                .build()
-    ///             .expect("Found illegal configuration");
-    ///
-    ///     let socket = ClientBuilder::new("http://localhost:4200/")
-    ///         .namespace("/admin")
-    ///         .on("error", |err, _| async move { eprintln!("Error: {:#?}", err) }.boxed())
-    ///         .tls_config(tls_connector)
-    ///         .connect()
-    ///         .await;
-    /// }
-    /// ```
-    pub fn tls_config(mut self, tls_config: TlsConnector) -> Self {
+    #[cfg_attr(
+        feature = "_native-tls",
+        doc = r#"
+# Example for native-tls
+
+```rust
+use rust_socketio::{asynchronous::ClientBuilder, Payload};
+use futures_util::future::FutureExt;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let tls_connector = native_tls::TlsConnector::builder()
+                .use_sni(true)
+                .build()
+                .expect("Found illegal configuration");
+
+# #[cfg(not(feature = "_rustls-tls"))] {
+    let socket = ClientBuilder::new("http://localhost:4200/")
+        .namespace("/admin")
+        .on("error", |err, _| async move { eprintln!("Error: {:#?}", err) }.boxed())
+        .tls_config(tls_connector)
+        .connect()
+        .await?;
+# }
+    Ok(())
+}
+```"#
+    )]
+    #[cfg_attr(
+        feature = "_rustls-tls",
+        doc = r#"
+# Example for rustls
+
+```rust
+use rust_socketio::{asynchronous::ClientBuilder, Payload};
+use futures_util::future::FutureExt;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let tls_config = rustls::ClientConfig::builder()
+        .with_root_certificates(rustls::RootCertStore::empty())
+        .with_no_client_auth();
+
+    let socket = ClientBuilder::new("http://localhost:4200/")
+        .namespace("/admin")
+        .on("error", |err, _| async move { eprintln!("Error: {:#?}", err) }.boxed())
+        .tls_config(tls_config)
+        .connect()
+        .await?;
+    Ok(())
+}
+```"#
+    )]
+    pub fn tls_config(mut self, tls_config: TlsConfig) -> Self {
         self.tls_config = Some(tls_config);
         self
     }
@@ -364,6 +400,13 @@ impl ClientBuilder {
     /// ```
     pub fn transport_type(mut self, transport_type: TransportType) -> Self {
         self.transport_type = transport_type;
+
+        self
+    }
+
+    /// Specifies which [`PacketParser`] to use to parse [`Packet`].
+    pub fn parser(mut self, parser: impl PacketParser + Send + Sync + 'static) -> Self {
+        self.parser = Arc::new(parser);
 
         self
     }
@@ -454,7 +497,7 @@ impl ClientBuilder {
             TransportType::WebsocketUpgrade => builder.build_websocket_with_upgrade().await?,
         };
 
-        let inner_socket = InnerSocket::new(engine_client)?;
+        let inner_socket = InnerSocket::new(engine_client, Arc::clone(&self.parser))?;
         Ok(inner_socket)
     }
 
