@@ -61,7 +61,8 @@ impl Socket {
         }
 
         // the packet, encoded as an engine.io message packet
-        let engine_packet = EnginePacket::new(EnginePacketId::Message, self.parser.encode(&packet));
+        let engine_packet =
+            EnginePacket::new(self.parser.message_packet_id(), self.parser.encode(&packet));
         self.engine_client.emit(engine_packet)?;
 
         if let Some(attachments) = packet.attachments {

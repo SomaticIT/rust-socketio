@@ -4,13 +4,23 @@ use crate::{
     Error,
 };
 use bytes::Bytes;
+use rust_engineio::PacketId as EnginePacketId;
 use serde::de::IgnoredAny;
 use std::fmt::{Debug, Write};
 use std::str::from_utf8 as str_from_utf8;
 
 pub trait PacketParser {
+    fn is_binary(&self) -> bool;
     fn encode(&self, packet: &Packet) -> Bytes;
     fn decode(&self, payload: &Bytes) -> Result<Packet>;
+
+    fn message_packet_id(&self) -> EnginePacketId {
+        if self.is_binary() {
+            EnginePacketId::MessageBinary
+        } else {
+            EnginePacketId::Message
+        }
+    }
 }
 
 impl Debug for dyn PacketParser + Send + Sync {
@@ -22,6 +32,10 @@ impl Debug for dyn PacketParser + Send + Sync {
 pub struct DefaultPacketParser;
 
 impl PacketParser for DefaultPacketParser {
+    fn is_binary(&self) -> bool {
+        false
+    }
+
     fn encode(&self, packet: &Packet) -> Bytes {
         // first the packet type
         let mut buffer = String::new();
