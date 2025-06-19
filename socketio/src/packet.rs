@@ -104,7 +104,30 @@ impl Default for Packet {
 impl TryFrom<u8> for PacketId {
     type Error = Error;
     fn try_from(b: u8) -> Result<Self> {
-        PacketId::try_from(b as char)
+        match b {
+            0 => Ok(PacketId::Connect),
+            1 => Ok(PacketId::Disconnect),
+            2 => Ok(PacketId::Event),
+            3 => Ok(PacketId::Ack),
+            4 => Ok(PacketId::ConnectError),
+            5 => Ok(PacketId::BinaryEvent),
+            6 => Ok(PacketId::BinaryAck),
+            _ => PacketId::try_from(b as char),
+        }
+    }
+}
+
+impl From<PacketId> for u8 {
+    fn from(packet_id: PacketId) -> Self {
+        match packet_id {
+            PacketId::Connect => 0,
+            PacketId::Disconnect => 1,
+            PacketId::Event => 2,
+            PacketId::Ack => 3,
+            PacketId::ConnectError => 4,
+            PacketId::BinaryEvent => 5,
+            PacketId::BinaryAck => 6,
+        }
     }
 }
 
