@@ -172,6 +172,7 @@ pub mod client;
 /// Defines the events that could be sent or received.
 pub mod event;
 pub(crate) mod packet;
+pub(crate) mod parser;
 /// Deprecated import since 0.3.0-alpha-2, use Event in the crate root instead.
 /// Defines the types of payload (binary or string), that
 /// could be sent or received.
@@ -191,7 +192,10 @@ pub mod asynchronous;
 
 pub use error::Error;
 
-pub use {event::CloseReason, event::Event, payload::Payload};
+pub use {
+    event::CloseReason, event::Event, packet::Packet, packet::PacketId,
+    parser::DefaultPacketParser, parser::PacketParser, payload::Payload,
+};
 
 pub use client::{ClientBuilder, RawClient, TransportType};
 

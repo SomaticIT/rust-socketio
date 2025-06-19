@@ -32,6 +32,7 @@ serde = "1.0.215"
 
 [dev-dependencies]
 cargo-tarpaulin = "0.18.5"
+ciborium = "0.2.2"
 serial_test = "3.0.0"
 
 [dev-dependencies.tokio]
